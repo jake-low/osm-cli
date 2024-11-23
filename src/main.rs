@@ -1,8 +1,8 @@
-use std::process;
-use std::{error::Error, io};
+use std::io;
 
 use clap::{Parser, Subcommand};
 
+mod changeset;
 mod element;
 mod replication;
 mod util;
@@ -29,10 +29,13 @@ enum Command {
     /// Get info about a Relation
     Relation(element::CliArgs),
 
+    /// Get info about a Changeset
+    Changeset(changeset::CliArgs),
+
     Replication(replication::CliArgs),
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> anyhow::Result<()> {
     let args = CliArgs::parse();
 
     let server = &args.server;
@@ -41,6 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Command::Node(args) => element::run(server, "node", &args),
         Command::Way(args) => element::run(server, "way", &args),
         Command::Relation(args) => element::run(server, "relation", &args),
+        Command::Changeset(args) => changeset::run(server, &args),
 
         Command::Replication(args) => replication::run(&args),
     };

@@ -10,19 +10,19 @@ pub struct CliArgs {
     #[arg(short, long, default_value_t = Format::Xml)]
     format: Format,
 
-    /// Fetch the full history of the element
+    /// Fetch the full diff instead of the metadata
     #[arg(long)]
-    history: bool,
+    diff: bool,
 
-    /// Element ID to retrieve
+    /// Changeset ID to retrieve
     id: u64,
 }
 
-pub fn run(server: &str, element_type: &str, args: &CliArgs) -> anyhow::Result<()> {
-    let endpoint = if args.history {
-        format!("{}/api/0.6/{}/{}/history", server, element_type, args.id)
+pub fn run(server: &str, args: &CliArgs) -> anyhow::Result<()> {
+    let endpoint = if args.diff {
+        format!("{}/api/0.6/changeset/{}/download", server, args.id)
     } else {
-        format!("{}/api/0.6/{}/{}", server, element_type, args.id)
+        format!("{}/api/0.6/changeset/{}", server, args.id)
     };
 
     let req = ureq::get(&endpoint).set("Accept", args.format.mimetype());
