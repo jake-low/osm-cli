@@ -1,50 +1,76 @@
-use std::error::Error;
-use std::fmt::LowerExp;
 use std::io::{self, BufRead, Read, Write};
+use std::thread::sleep;
+use std::time::Duration;
 
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, Utc};
 use clap::Parser;
-
-const DEFAULT_SERVER: &str = "https://planet.openstreetmap.org"; // FIXME: make this configurable
 
 #[derive(Parser)]
 pub struct CliArgs {
     /// Timestamp in RFC 2822 or RFC 3339 format
     #[arg(long)]
-    since: String,
+    since: Option<String>,
+
+    #[arg(long)]
+    seqno: Option<u64>,
 
     /// Run forever, writing new replication file URLs to stdout as they are published
     #[arg(long)]
     watch: bool,
+
+    /// Server short name [minute, changesets] or URL
+    server: String,
 }
 
-pub fn run(args: &CliArgs) -> Result<(), Box<dyn Error>> {
-    // let endpoint = format!("{}/replication/minute/", server);
+pub fn run(args: &CliArgs) -> anyhow::Result<()> {
+    let server = match &args.server[..] {
+        "minute" => "https://planet.openstreetmap.org/replication/minute",
+        "changesets" => "https://planet.openstreetmap.org/replication/changesets",
+        url => url,
+    };
 
-    let since: DateTime<Utc> = DateTime::parse_from_rfc2822(&args.since)
-        .ok()
-        .or_else(|| DateTime::parse_from_rfc3339(&args.since).ok())
-        .expect("failed to parse --since as timestamp")
-        .into();
+    let start_seqno = if let Some(since) = &args.since {
+        let since: DateTime<Utc> = DateTime::parse_from_rfc2822(since)
+            .ok()
+            .or_else(|| DateTime::parse_from_rfc3339(since).ok())
+            .expect("failed to parse --since as timestamp")
+            .into();
+        eprintln!("binary searching to find starting sequence number");
 
-    eprintln!("binary searching to find starting sequence number");
+        timestamp_to_seqno(server, since)?
+    } else if let Some(seqno) = args.seqno {
+        seqno
+    } else {
+        panic!("require either --since or --seqno");
+    };
 
-    let start_seqno = timestamp_to_seqno(since);
+    let latest = get_current_state_info(server)?;
 
-    let latest = get_current_state_info();
+    for seqno in start_seqno..=latest.seqno {
+        writeln!(io::stdout(), "{}", osc_url(server, seqno))?;
+    }
 
-    for seqno in start_seqno..latest.seqno {
-        writeln!(io::stdout(), "{}", osc_url(seqno))?;
+    if args.watch {
+        let mut seqno = latest.seqno;
+
+        loop {
+            sleep(Duration::from_secs(60));
+            let latest = get_current_state_info(server)?;
+            while seqno < latest.seqno {
+                seqno += 1;
+                writeln!(io::stdout(), "{}", osc_url(server, seqno))?;
+            }
+        }
     }
 
     Ok(())
 }
 
-fn timestamp_to_seqno(timestamp: DateTime<Utc>) -> u64 {
-    let mut upper = get_current_state_info();
+fn timestamp_to_seqno(server: &str, timestamp: DateTime<Utc>) -> anyhow::Result<u64> {
+    let mut upper = get_current_state_info(server)?;
 
     if upper.timestamp < timestamp || upper.seqno == 0 {
-        return upper.seqno;
+        return Ok(upper.seqno);
     }
 
     let mut guess: u64 = 0;
@@ -53,11 +79,11 @@ fn timestamp_to_seqno(timestamp: DateTime<Utc>) -> u64 {
     // find a state file that is below the required timestamp
     loop {
         // eprintln!("Trying with Id {}", guess);
-        lower = get_state_info(guess).ok();
+        lower = get_state_info(server, guess).ok();
 
         if let Some(lower) = &lower {
             if lower.timestamp >= timestamp {
-                return lower.seqno;
+                return Ok(lower.seqno);
             } else {
                 break;
             }
@@ -66,7 +92,7 @@ fn timestamp_to_seqno(timestamp: DateTime<Utc>) -> u64 {
         if lower.is_none() {
             let step = (upper.seqno - guess) / 2;
             if step == 0 {
-                return upper.seqno;
+                return Ok(upper.seqno);
             }
             guess += step;
         }
@@ -86,12 +112,12 @@ fn timestamp_to_seqno(timestamp: DateTime<Utc>) -> u64 {
         let desired_time_step = (timestamp - lower.timestamp).num_seconds();
         guess = lower.seqno + f64::ceil((desired_time_step as f64) * seqno_rate) as u64;
         if guess == upper.seqno {
-            guess = guess - 1;
+            guess -= 1;
         }
 
         // dbg!(&guess);
 
-        let split = get_state_info(guess);
+        let split = get_state_info(server, guess);
 
         // TODO: what if split.is_none() (i.e. guess not found)?
         // we should walk up+down to find a nearby split candidate
@@ -108,7 +134,7 @@ fn timestamp_to_seqno(timestamp: DateTime<Utc>) -> u64 {
         }
 
         if lower.seqno + 1 >= upper.seqno {
-            return lower.seqno;
+            return Ok(lower.seqno);
         }
         // eprintln!("trying again");
     }
@@ -121,12 +147,12 @@ struct StateInfo {
 }
 
 impl StateInfo {
-    fn try_from_reader(reader: impl Read) -> Result<Self, ()> {
+    fn try_from_reader(reader: impl Read) -> anyhow::Result<Self> {
         let mut seqno: Option<u64> = None;
         let mut timestamp: Option<DateTime<Utc>> = None;
 
         for line in io::BufReader::new(reader).lines().flatten() {
-            if line.starts_with("#") {
+            if line.starts_with('#') {
                 continue;
             }
 
@@ -147,8 +173,7 @@ impl StateInfo {
                 "timestamp" => {
                     timestamp = DateTime::parse_from_rfc3339(&v.replace('\\', ""))
                         .ok()
-                        .map(|dt| dt.try_into().ok())
-                        .flatten();
+                        .and_then(|dt| dt.try_into().ok());
                 }
                 _ => continue,
             }
@@ -161,37 +186,37 @@ impl StateInfo {
     }
 }
 
-fn get_current_state_info() -> StateInfo {
-    let res = ureq::get(&latest_state_url()).call().unwrap();
+fn get_current_state_info(server: &str) -> anyhow::Result<StateInfo> {
+    let res = ureq::get(&latest_state_url(server)).call()?;
 
-    StateInfo::try_from_reader(res.into_reader()).unwrap()
+    Ok(StateInfo::try_from_reader(res.into_reader())?)
 }
 
-fn get_state_info(seqno: u64) -> Result<StateInfo, ureq::Error> {
+fn get_state_info(server: &str, seqno: u64) -> anyhow::Result<StateInfo> {
     // TODO
     eprintln!("getting state for seqno {}", seqno);
-    let res = ureq::get(&state_url(seqno)).call()?;
+    let res = ureq::get(&state_url(server, seqno)).call()?;
 
-    Ok(StateInfo::try_from_reader(res.into_reader()).unwrap())
+    Ok(StateInfo::try_from_reader(res.into_reader())?)
 }
 
-fn latest_state_url() -> String {
-    format!("{}/replication/minute/state.txt", DEFAULT_SERVER)
+fn latest_state_url(server: &str) -> String {
+    format!("{}/state.txt", server)
 }
 
-fn state_url(seqno: u64) -> String {
+fn state_url(server: &str, seqno: u64) -> String {
     let triplet = seqno_to_triplet(seqno);
     format!(
-        "{}/replication/minute/{:03}/{:03}/{:03}.state.txt",
-        DEFAULT_SERVER, triplet.0, triplet.1, triplet.2
+        "{}/{:03}/{:03}/{:03}.state.txt",
+        server, triplet.0, triplet.1, triplet.2
     )
 }
 
-fn osc_url(seqno: u64) -> String {
+fn osc_url(server: &str, seqno: u64) -> String {
     let triplet = seqno_to_triplet(seqno);
     format!(
-        "{}/replication/minute/{:03}/{:03}/{:03}.osc.gz",
-        DEFAULT_SERVER, triplet.0, triplet.1, triplet.2
+        "{}/{:03}/{:03}/{:03}.osc.gz",
+        server, triplet.0, triplet.1, triplet.2
     )
 }
 
