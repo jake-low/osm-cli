@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use clap::Parser;
+use serde::{Deserialize, Serialize};
 
 #[derive(Parser)]
 pub struct CliArgs {
@@ -24,9 +25,21 @@ pub struct CliArgs {
 
 pub fn run(args: &CliArgs) -> anyhow::Result<()> {
     let server = match &args.server[..] {
-        "minute" => "https://planet.openstreetmap.org/replication/minute",
-        "changesets" => "https://planet.openstreetmap.org/replication/changesets",
-        url => url,
+        "minute" => ReplicationServer {
+            base_url: "https://planet.openstreetmap.org/replication/minute".to_string(),
+            current_state_path: "state.txt".to_string(),
+            state_file_format: StateFileFormat::Text,
+        },
+        "changesets" => ReplicationServer {
+            base_url: "https://planet.openstreetmap.org/replication/changesets".to_string(),
+            current_state_path: "state.yaml".to_string(),
+            state_file_format: StateFileFormat::Yaml,
+        },
+        url => ReplicationServer {
+            base_url: url.to_string(),
+            current_state_path: "state.txt".to_string(),
+            state_file_format: StateFileFormat::Text,
+        },
     };
 
     let start_seqno = if let Some(since) = &args.since {
@@ -37,17 +50,17 @@ pub fn run(args: &CliArgs) -> anyhow::Result<()> {
             .into();
         eprintln!("binary searching to find starting sequence number");
 
-        timestamp_to_seqno(server, since)?
+        server.timestamp_to_seqno(since)?
     } else if let Some(seqno) = args.seqno {
         seqno
     } else {
         panic!("require either --since or --seqno");
     };
 
-    let latest = get_current_state_info(server)?;
+    let latest = server.get_current_state_info()?;
 
     for seqno in start_seqno..=latest.seqno {
-        writeln!(io::stdout(), "{}", osc_url(server, seqno))?;
+        writeln!(io::stdout(), "{}", server.osc_url(seqno))?;
     }
 
     if args.watch {
@@ -55,10 +68,10 @@ pub fn run(args: &CliArgs) -> anyhow::Result<()> {
 
         loop {
             sleep(Duration::from_secs(60));
-            let latest = get_current_state_info(server)?;
+            let latest = server.get_current_state_info()?;
             while seqno < latest.seqno {
                 seqno += 1;
-                writeln!(io::stdout(), "{}", osc_url(server, seqno))?;
+                writeln!(io::stdout(), "{}", server.osc_url(seqno))?;
             }
         }
     }
@@ -66,83 +79,154 @@ pub fn run(args: &CliArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn timestamp_to_seqno(server: &str, timestamp: DateTime<Utc>) -> anyhow::Result<u64> {
-    let mut upper = get_current_state_info(server)?;
+struct ReplicationServer {
+    base_url: String,
+    current_state_path: String,
+    state_file_format: StateFileFormat,
+}
 
-    if upper.timestamp < timestamp || upper.seqno == 0 {
-        return Ok(upper.seqno);
-    }
+#[derive(Debug, PartialEq, Eq)]
+enum StateFileFormat {
+    Yaml,
+    Text,
+}
 
-    let mut guess: u64 = 0;
-    let mut lower: Option<StateInfo>;
+impl ReplicationServer {
+    fn timestamp_to_seqno(&self, timestamp: DateTime<Utc>) -> anyhow::Result<u64> {
+        let mut upper = self.get_current_state_info()?;
 
-    // find a state file that is below the required timestamp
-    loop {
-        // eprintln!("Trying with Id {}", guess);
-        lower = get_state_info(server, guess).ok();
+        if upper.timestamp < timestamp || upper.seqno == 0 {
+            return Ok(upper.seqno);
+        }
 
-        if let Some(lower) = &lower {
-            if lower.timestamp >= timestamp {
-                return Ok(lower.seqno);
+        let mut guess: u64 = 0;
+        let mut lower: Option<StateInfo>;
+
+        // find a state file that is below the required timestamp
+        loop {
+            // eprintln!("Trying with Id {}", guess);
+            lower = self.get_state_info(guess).ok();
+
+            if let Some(lower) = &lower {
+                if lower.timestamp >= timestamp {
+                    return Ok(lower.seqno);
+                } else {
+                    break;
+                }
+            }
+
+            if lower.is_none() {
+                let step = (upper.seqno - guess) / 2;
+                if step == 0 {
+                    return Ok(upper.seqno);
+                }
+                guess += step;
+            }
+        }
+
+        let mut lower = lower.unwrap();
+
+        assert!(lower.seqno < upper.seqno);
+
+        loop {
+            // dbg!(&lower);
+            // dbg!(&upper);
+
+            let time_delta = (upper.timestamp - lower.timestamp).num_seconds();
+            let seqno_delta = upper.seqno - lower.seqno;
+            let seqno_rate = (seqno_delta as f64) / (time_delta as f64);
+            let desired_time_step = (timestamp - lower.timestamp).num_seconds();
+            guess = lower.seqno + f64::ceil((desired_time_step as f64) * seqno_rate) as u64;
+            if guess == upper.seqno {
+                guess -= 1;
+            }
+
+            // dbg!(&guess);
+
+            let split = self.get_state_info(guess);
+
+            // TODO: what if split.is_none() (i.e. guess not found)?
+            // we should walk up+down to find a nearby split candidate
+            let split = split.unwrap();
+
+            // dbg!(&split);
+
+            if split.timestamp < timestamp {
+                // eprintln!("guess was too low");
+                lower = split;
             } else {
-                break;
+                // eprintln!("guess was too high");
+                upper = split;
             }
-        }
 
-        if lower.is_none() {
-            let step = (upper.seqno - guess) / 2;
-            if step == 0 {
-                return Ok(upper.seqno);
+            if lower.seqno + 1 >= upper.seqno {
+                return Ok(lower.seqno);
             }
-            guess += step;
+            // eprintln!("trying again");
         }
     }
 
-    let mut lower = lower.unwrap();
+    fn get_current_state_info(&self) -> anyhow::Result<StateInfo> {
+        let url = self.latest_state_url();
+        eprintln!("GET {}", &url);
+        let res = ureq::get(&url).call()?;
 
-    assert!(lower.seqno < upper.seqno);
+        let state_info: StateInfo = match self.state_file_format {
+            StateFileFormat::Yaml => serde_yaml::from_reader(res.into_reader())?,
+            StateFileFormat::Text => StateInfo::try_from_reader(res.into_reader())?,
+        };
 
-    loop {
-        // dbg!(&lower);
-        // dbg!(&upper);
+        Ok(state_info)
+    }
 
-        let time_delta = (upper.timestamp - lower.timestamp).num_seconds();
-        let seqno_delta = upper.seqno - lower.seqno;
-        let seqno_rate = (seqno_delta as f64) / (time_delta as f64);
-        let desired_time_step = (timestamp - lower.timestamp).num_seconds();
-        guess = lower.seqno + f64::ceil((desired_time_step as f64) * seqno_rate) as u64;
-        if guess == upper.seqno {
-            guess -= 1;
-        }
+    fn get_state_info(&self, seqno: u64) -> anyhow::Result<StateInfo> {
+        let url = self.state_url(seqno);
+        eprintln!("GET {}", &url);
+        let res = ureq::get(&url).call()?;
 
-        // dbg!(&guess);
+        let state_info: StateInfo = match self.state_file_format {
+            StateFileFormat::Yaml => serde_yaml::from_reader(res.into_reader())?,
+            StateFileFormat::Text => StateInfo::try_from_reader(res.into_reader())?,
+        };
 
-        let split = get_state_info(server, guess);
+        Ok(state_info)
+    }
 
-        // TODO: what if split.is_none() (i.e. guess not found)?
-        // we should walk up+down to find a nearby split candidate
-        let split = split.unwrap();
+    fn latest_state_url(&self) -> String {
+        format!("{}/{}", self.base_url, self.current_state_path)
+    }
 
-        // dbg!(&split);
+    fn state_url(&self, seqno: u64) -> String {
+        let triplet = seqno_to_triplet(seqno);
+        format!(
+            "{}/{:03}/{:03}/{:03}.state.txt",
+            self.base_url, triplet.0, triplet.1, triplet.2
+        )
+    }
 
-        if split.timestamp < timestamp {
-            // eprintln!("guess was too low");
-            lower = split;
-        } else {
-            // eprintln!("guess was too high");
-            upper = split;
-        }
-
-        if lower.seqno + 1 >= upper.seqno {
-            return Ok(lower.seqno);
-        }
-        // eprintln!("trying again");
+    fn osc_url(&self, seqno: u64) -> String {
+        let triplet = seqno_to_triplet(seqno);
+        format!(
+            "{}/{:03}/{:03}/{:03}.osc.gz",
+            self.base_url, triplet.0, triplet.1, triplet.2
+        )
     }
 }
 
-#[derive(Debug)]
+fn seqno_to_triplet(seqno: u64) -> (u16, u16, u16) {
+    let hi = (seqno / 1_000_000) as u16;
+    let md = ((seqno % 1_000_000) / 1000) as u16;
+    let lo = (seqno % 1000) as u16;
+
+    (hi, md, lo)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct StateInfo {
+    #[serde(alias = "sequence")]
     seqno: u64,
+
+    #[serde(alias = "last_run")]
     timestamp: DateTime<Utc>,
 }
 
@@ -184,46 +268,4 @@ impl StateInfo {
             timestamp: timestamp.expect("timestamp not found"),
         })
     }
-}
-
-fn get_current_state_info(server: &str) -> anyhow::Result<StateInfo> {
-    let res = ureq::get(&latest_state_url(server)).call()?;
-
-    Ok(StateInfo::try_from_reader(res.into_reader())?)
-}
-
-fn get_state_info(server: &str, seqno: u64) -> anyhow::Result<StateInfo> {
-    // TODO
-    eprintln!("getting state for seqno {}", seqno);
-    let res = ureq::get(&state_url(server, seqno)).call()?;
-
-    Ok(StateInfo::try_from_reader(res.into_reader())?)
-}
-
-fn latest_state_url(server: &str) -> String {
-    format!("{}/state.txt", server)
-}
-
-fn state_url(server: &str, seqno: u64) -> String {
-    let triplet = seqno_to_triplet(seqno);
-    format!(
-        "{}/{:03}/{:03}/{:03}.state.txt",
-        server, triplet.0, triplet.1, triplet.2
-    )
-}
-
-fn osc_url(server: &str, seqno: u64) -> String {
-    let triplet = seqno_to_triplet(seqno);
-    format!(
-        "{}/{:03}/{:03}/{:03}.osc.gz",
-        server, triplet.0, triplet.1, triplet.2
-    )
-}
-
-fn seqno_to_triplet(seqno: u64) -> (u16, u16, u16) {
-    let hi = (seqno / 1_000_000) as u16;
-    let md = ((seqno % 1_000_000) / 1000) as u16;
-    let lo = (seqno % 1000) as u16;
-
-    (hi, md, lo)
 }
