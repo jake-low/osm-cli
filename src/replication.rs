@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use clap::Parser;
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 
 #[derive(Parser)]
@@ -19,11 +20,18 @@ pub struct CliArgs {
     #[arg(long)]
     watch: bool,
 
+    /// Only print URLs of replication files (not their seqnos and timestamps). This
+    /// is faster since it doesn't require a GET request per line of output.
+    #[arg(long)]
+    urls_only: bool,
+
     /// Server short name [minute, changesets] or URL
     server: String,
 }
 
 pub fn run(args: &CliArgs) -> anyhow::Result<()> {
+    env_logger::init();
+
     let server = match &args.server[..] {
         "minute" => ReplicationServer {
             base_url: "https://planet.openstreetmap.org/replication/minute".to_string(),
@@ -48,7 +56,7 @@ pub fn run(args: &CliArgs) -> anyhow::Result<()> {
             .or_else(|| DateTime::parse_from_rfc3339(since).ok())
             .expect("failed to parse --since as timestamp")
             .into();
-        eprintln!("binary searching to find starting sequence number");
+        info!("binary searching to find starting sequence number");
 
         server.timestamp_to_seqno(since)?
     } else if let Some(seqno) = args.seqno {
@@ -57,22 +65,34 @@ pub fn run(args: &CliArgs) -> anyhow::Result<()> {
         panic!("require either --since or --seqno");
     };
 
-    let latest = server.get_current_state_info()?;
+    let mut seqno = start_seqno;
+    let mut latest = server.get_current_state_info()?;
 
-    for seqno in start_seqno..=latest.seqno {
-        writeln!(io::stdout(), "{}", server.osc_url(seqno))?;
-    }
-
-    if args.watch {
-        let mut seqno = latest.seqno;
-
-        loop {
-            sleep(Duration::from_secs(60));
-            let latest = server.get_current_state_info()?;
-            while seqno < latest.seqno {
-                seqno += 1;
-                writeln!(io::stdout(), "{}", server.osc_url(seqno))?;
+    loop {
+        if seqno >= latest.seqno {
+            if args.watch {
+                sleep(Duration::from_secs(60));
+                latest = server.get_current_state_info()?;
+            } else {
+                break;
             }
+        }
+
+        seqno += 1;
+
+        let url = server.osc_url(seqno);
+        if args.urls_only {
+            writeln!(io::stdout(), "{}", url)?;
+        } else {
+            let info = server.get_state_info(seqno)?;
+            writeln!(
+                io::stdout(),
+                "{} {} {}",
+                info.seqno,
+                info.timestamp
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                url
+            )?;
         }
     }
 
@@ -104,7 +124,6 @@ impl ReplicationServer {
 
         // find a state file that is below the required timestamp
         loop {
-            // eprintln!("Trying with Id {}", guess);
             lower = self.get_state_info(guess).ok();
 
             if let Some(lower) = &lower {
@@ -142,6 +161,7 @@ impl ReplicationServer {
             }
 
             // dbg!(&guess);
+            debug!("guessing {}", &guess);
 
             let split = self.get_state_info(guess);
 
@@ -152,23 +172,23 @@ impl ReplicationServer {
             // dbg!(&split);
 
             if split.timestamp < timestamp {
-                // eprintln!("guess was too low");
+                debug!("guess was too low");
                 lower = split;
             } else {
-                // eprintln!("guess was too high");
+                debug!("guess was too high");
                 upper = split;
             }
 
             if lower.seqno + 1 >= upper.seqno {
                 return Ok(lower.seqno);
             }
-            // eprintln!("trying again");
+            debug!("trying again");
         }
     }
 
     fn get_current_state_info(&self) -> anyhow::Result<StateInfo> {
         let url = self.latest_state_url();
-        eprintln!("GET {}", &url);
+        info!("GET {}", &url);
         let res = ureq::get(&url).call()?;
 
         let state_info: StateInfo = match self.state_file_format {
@@ -181,7 +201,7 @@ impl ReplicationServer {
 
     fn get_state_info(&self, seqno: u64) -> anyhow::Result<StateInfo> {
         let url = self.state_url(seqno);
-        eprintln!("GET {}", &url);
+        info!("GET {}", &url);
         let res = ureq::get(&url).call()?;
 
         let state_info: StateInfo = match self.state_file_format {
@@ -197,6 +217,14 @@ impl ReplicationServer {
     }
 
     fn state_url(&self, seqno: u64) -> String {
+        let seqno = if self.base_url == "https://planet.openstreetmap.org/replication/changesets" {
+            // HACK: the changeset replication sequence numbers are off by one from the filenames,
+            // see https://osmus.slack.com/archives/C1VE7JM9T/p1732434693862139?thread_ts=1727214687.839279&cid=C1VE7JM9T
+            seqno.saturating_sub(1)
+        } else {
+            seqno
+        };
+
         let triplet = seqno_to_triplet(seqno);
         format!(
             "{}/{:03}/{:03}/{:03}.state.txt",
@@ -235,7 +263,7 @@ impl StateInfo {
         let mut seqno: Option<u64> = None;
         let mut timestamp: Option<DateTime<Utc>> = None;
 
-        for line in io::BufReader::new(reader).lines().flatten() {
+        for line in io::BufReader::new(reader).lines().map_while(Result::ok) {
             if line.starts_with('#') {
                 continue;
             }
@@ -257,7 +285,7 @@ impl StateInfo {
                 "timestamp" => {
                     timestamp = DateTime::parse_from_rfc3339(&v.replace('\\', ""))
                         .ok()
-                        .and_then(|dt| dt.try_into().ok());
+                        .map(|dt| dt.into());
                 }
                 _ => continue,
             }
