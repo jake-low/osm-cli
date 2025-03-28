@@ -6,7 +6,7 @@ authors = ["Jake Low <hello@jakelow.com>"]
 homepage = "https://github.com/jake-low/osm-cli"
 repository = "https://github.com/jake-low/osm-cli"
 license = "ISC"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 anyhow = "1.0.93"
