@@ -37,16 +37,23 @@ pub fn run(args: &CliArgs) -> anyhow::Result<()> {
             base_url: "https://planet.openstreetmap.org/replication/minute".to_string(),
             current_state_path: "state.txt".to_string(),
             state_file_format: StateFileFormat::Text,
+            state_file_extension: ".state.txt".to_string(),
+            data_file_extension: ".osc.gz".to_string(),
         },
         "changesets" => ReplicationServer {
             base_url: "https://planet.openstreetmap.org/replication/changesets".to_string(),
             current_state_path: "state.yaml".to_string(),
             state_file_format: StateFileFormat::Yaml,
+            state_file_extension: ".state.txt".to_string(),
+            data_file_extension: ".osm.gz".to_string(),
         },
         url => ReplicationServer {
             base_url: url.to_string(),
+            // TODO: these values should probably be user-configurable
             current_state_path: "state.txt".to_string(),
             state_file_format: StateFileFormat::Text,
+            state_file_extension: ".state.txt".to_string(),
+            data_file_extension: ".osc.gz".to_string(),
         },
     };
 
@@ -80,7 +87,7 @@ pub fn run(args: &CliArgs) -> anyhow::Result<()> {
 
         seqno += 1;
 
-        let url = server.osc_url(seqno);
+        let url = server.data_url(seqno);
         if args.urls_only {
             writeln!(io::stdout(), "{}", url)?;
         } else {
@@ -103,6 +110,8 @@ struct ReplicationServer {
     base_url: String,
     current_state_path: String,
     state_file_format: StateFileFormat,
+    state_file_extension: String,
+    data_file_extension: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -217,27 +226,49 @@ impl ReplicationServer {
     }
 
     fn state_url(&self, seqno: u64) -> String {
-        let seqno = if self.base_url == "https://planet.openstreetmap.org/replication/changesets" {
-            // HACK: the changeset replication sequence numbers are off by one from the filenames,
-            // see https://osmus.slack.com/archives/C1VE7JM9T/p1732434693862139?thread_ts=1727214687.839279&cid=C1VE7JM9T
-            seqno.saturating_sub(1)
-        } else {
-            seqno
-        };
-
+        let seqno = self.seqno_for_url(seqno);
         let triplet = seqno_to_triplet(seqno);
         format!(
-            "{}/{:03}/{:03}/{:03}.state.txt",
-            self.base_url, triplet.0, triplet.1, triplet.2
+            "{}/{:03}/{:03}/{:03}{}",
+            self.base_url, triplet.0, triplet.1, triplet.2, self.state_file_extension
         )
     }
 
-    fn osc_url(&self, seqno: u64) -> String {
+    fn data_url(&self, seqno: u64) -> String {
+        let seqno = self.seqno_for_url(seqno);
         let triplet = seqno_to_triplet(seqno);
         format!(
-            "{}/{:03}/{:03}/{:03}.osc.gz",
-            self.base_url, triplet.0, triplet.1, triplet.2
+            "{}/{:03}/{:03}/{:03}{}",
+            self.base_url, triplet.0, triplet.1, triplet.2, self.data_file_extension
         )
+    }
+
+    fn seqno_for_url(&self, seqno: u64) -> u64 {
+        if self.base_url == "https://planet.openstreetmap.org/replication/changesets" {
+            // HACK: the changeset replication sequence numbers are off by one from the filenames,
+            // so we need to increment the given seqno when constructing a URL.
+            //
+            // For example: if /replication/changesets/state.yaml says the most recent sequence
+            // number is 1234567, then /replication/changesets/001/234/568.state.txt (not
+            // 567.state.txt!) will be identical in content to state.yaml, and fetching
+            // /replication/changesets/001/234/568.osm.gz (not 567.osm.gz!) will return
+            // changesets from the roughly one-minute window prior to the last_run time
+            // listed in state.yaml.
+            //
+            // Since the sequence numbers in state.yaml and the individual NNN.state.txt files
+            // agree with each other, this program treats those as the correct values, and uses
+            // those values when comparing to `--seqno` and when printing sequence numbers in
+            // the output. If you need sequence numbers you are advised to treat the seqnos in
+            // the first column of this program's output as correct, and treat the URLs as opaque
+            // (do not parse the sequence numbers out of the URLs, because they are off by one).
+            //
+            // See also https://osmus.slack.com/archives/C1VE7JM9T/p1732434693862139?thread_ts=1727214687.839279&cid=C1VE7JM9T
+            seqno.saturating_add(1)
+        } else {
+            // For other replication endpoints the sequence numbers in the state files agree with
+            // those in the URLs, so this function is just the identity function
+            seqno
+        }
     }
 }
 
