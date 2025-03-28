@@ -26,3 +26,11 @@ impl fmt::Display for Format {
         write!(f, "{}", s)
     }
 }
+
+/// Returns the mime-type portion of the Content-Type header, if present
+pub fn content_type<T>(res: &ureq::http::Response<T>) -> Option<&str> {
+    res.headers()
+        .get("Content-Type")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(";").next())
+}

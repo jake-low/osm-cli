@@ -199,10 +199,11 @@ impl ReplicationServer {
         let url = self.latest_state_url();
         info!("GET {}", &url);
         let res = ureq::get(&url).call()?;
+        let mut body = res.into_body();
 
         let state_info: StateInfo = match self.state_file_format {
-            StateFileFormat::Yaml => serde_yaml::from_reader(res.into_reader())?,
-            StateFileFormat::Text => StateInfo::try_from_reader(res.into_reader())?,
+            StateFileFormat::Yaml => serde_yaml::from_reader(body.as_reader())?,
+            StateFileFormat::Text => StateInfo::try_from_reader(body.as_reader())?,
         };
 
         Ok(state_info)
@@ -212,10 +213,11 @@ impl ReplicationServer {
         let url = self.state_url(seqno);
         info!("GET {}", &url);
         let res = ureq::get(&url).call()?;
+        let mut body = res.into_body();
 
         let state_info: StateInfo = match self.state_file_format {
-            StateFileFormat::Yaml => serde_yaml::from_reader(res.into_reader())?,
-            StateFileFormat::Text => StateInfo::try_from_reader(res.into_reader())?,
+            StateFileFormat::Yaml => serde_yaml::from_reader(body.as_reader())?,
+            StateFileFormat::Text => StateInfo::try_from_reader(body.as_reader())?,
         };
 
         Ok(state_info)

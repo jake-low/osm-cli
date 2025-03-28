@@ -12,7 +12,6 @@ const DEFAULT_SERVER: &str = "https://www.openstreetmap.org";
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct CliArgs {
-    ///
     #[arg(long, default_value = DEFAULT_SERVER)]
     server: String,
 
@@ -28,10 +27,9 @@ enum Command {
     Way(element::CliArgs),
     /// Get info about a Relation
     Relation(element::CliArgs),
-
     /// Get info about a Changeset
     Changeset(changeset::CliArgs),
-
+    /// Subscribe to info about new OSM edits or changesets
     Replication(replication::CliArgs),
 }
 

@@ -2,7 +2,7 @@ use std::io::{self, Write};
 
 use clap::Parser;
 
-use crate::util::Format;
+use crate::util::{Format, content_type};
 
 #[derive(Parser)]
 pub struct CliArgs {
@@ -25,16 +25,17 @@ pub fn run(server: &str, element_type: &str, args: &CliArgs) -> anyhow::Result<(
         format!("{}/api/0.6/{}/{}", server, element_type, args.id)
     };
 
-    let req = ureq::get(&endpoint).set("Accept", args.format.mimetype());
+    let req = ureq::get(&endpoint).header("Accept", args.format.mimetype());
     let res = req.call()?;
 
-    match res.content_type() {
-        "application/json" => {
-            jsonxf::pretty_print_stream(&mut res.into_reader(), &mut io::stdout())?;
+    match content_type(&res) {
+        Some("application/json") => {
+            jsonxf::pretty_print_stream(&mut res.into_body().into_reader(), &mut io::stdout())?;
             writeln!(&mut io::stdout())?; // add trailing newline
         }
-        _ => {
-            io::copy(&mut res.into_reader(), &mut io::stdout())?;
+        other => {
+            dbg!(&other);
+            io::copy(&mut res.into_body().into_reader(), &mut io::stdout())?;
         }
     }
 
