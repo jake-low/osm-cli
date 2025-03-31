@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Versioning of this project adheres to the [Semantic Versioning](https://semver.org/spec/v2.0.0.html) spec.
 
+## [0.2.1]
+
+Released 2025-03-30
+
+- Removed a `dbg!()` log statement that was accidentally committed
+
 ## [0.2.0]
 
 Released 2025-03-28
@@ -24,5 +30,6 @@ Initial release.
 - Supports `node`, `way`, and `relation` subcommands for fetching info about OSM elements by ID.
 - Supports `replication` subcommand for listing available replication files since a given timestamp or seqno.
 
+[0.2.1]: https://github.com/jake-low/osm-cli/releases/tag/v0.2.1
 [0.2.0]: https://github.com/jake-low/osm-cli/releases/tag/v0.2.0
 [0.1.0]: https://github.com/jake-low/osm-cli/releases/tag/v0.1.0
