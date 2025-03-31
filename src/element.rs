@@ -33,8 +33,7 @@ pub fn run(server: &str, element_type: &str, args: &CliArgs) -> anyhow::Result<(
             jsonxf::pretty_print_stream(&mut res.into_body().into_reader(), &mut io::stdout())?;
             writeln!(&mut io::stdout())?; // add trailing newline
         }
-        other => {
-            dbg!(&other);
+        _ => {
             io::copy(&mut res.into_body().into_reader(), &mut io::stdout())?;
         }
     }
