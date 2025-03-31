@@ -154,11 +154,8 @@ impl ReplicationServer {
 
         let mut lower = lower.unwrap();
 
-        assert!(lower.seqno < upper.seqno);
-
         loop {
-            // dbg!(&lower);
-            // dbg!(&upper);
+            assert!(lower.seqno < upper.seqno);
 
             let time_delta = (upper.timestamp - lower.timestamp).num_seconds();
             let seqno_delta = upper.seqno - lower.seqno;
@@ -170,8 +167,10 @@ impl ReplicationServer {
                 guess -= 1;
             }
 
-            // dbg!(&guess);
-            debug!("guessing {}", &guess);
+            debug!(
+                "lower = {}, upper = {}, guessing {}",
+                &lower.seqno, &upper.seqno, &guess
+            );
 
             let split = self.get_state_info(guess);
 
@@ -179,20 +178,17 @@ impl ReplicationServer {
             // we should walk up+down to find a nearby split candidate
             let split = split.unwrap();
 
-            // dbg!(&split);
-
             if split.timestamp < timestamp {
-                debug!("guess was too low");
+                debug!("guess {} was too low ({})", &split.seqno, &split.timestamp);
                 lower = split;
             } else {
-                debug!("guess was too high");
+                debug!("guess {} was too high ({})", &split.seqno, &split.timestamp);
                 upper = split;
             }
 
             if lower.seqno + 1 >= upper.seqno {
                 return Ok(lower.seqno);
             }
-            debug!("trying again");
         }
     }
 
