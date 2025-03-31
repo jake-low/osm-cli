@@ -164,7 +164,8 @@ impl ReplicationServer {
             let seqno_delta = upper.seqno - lower.seqno;
             let seqno_rate = (seqno_delta as f64) / (time_delta as f64);
             let desired_time_step = (timestamp - lower.timestamp).num_seconds();
-            guess = lower.seqno + f64::ceil((desired_time_step as f64) * seqno_rate) as u64;
+            let step = f64::ceil((desired_time_step as f64) * seqno_rate);
+            guess = lower.seqno + f64::max(step, 1.0) as u64;
             if guess == upper.seqno {
                 guess -= 1;
             }
