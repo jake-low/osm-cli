@@ -12,7 +12,7 @@ $ cargo install osm-cli
 
 You can also clone this repository and run `cargo install --path .` in it.
 
-Note: `osm-cli` uses Rust 2024 (1.85.0). If during installation you run into an error message that says "this version of Cargo is older than the 2024 edition", you may need to update your Rust toolchain. If you installed Rust using `rustup`, run `rustup update`. Otherwise, update Rust using your system package manager.
+Note: `osm-cli` uses Rust 2024 (1.85.0). If during installation you run into an error message that says "this version of Cargo is older than the 2024 edition", you may need to update your Rust toolchain. If you installed Rust using [rustup](https://rustup.rs/), run `rustup update`. Otherwise, update Rust using your system package manager.
 
 ## Features
 
