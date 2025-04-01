@@ -1,6 +1,6 @@
 [package]
 name = "osm-cli"
-version = "0.2.1"
+version = "0.2.2"
 description = "Command-line tool to interact with the OpenStreetMap API"
 authors = ["Jake Low <hello@jakelow.com>"]
 homepage = "https://github.com/jake-low/osm-cli"
