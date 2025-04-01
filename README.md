@@ -4,7 +4,16 @@ A command line tool for interacting with the OpenStreetMap API.
 
 ## Installation
 
-This tool is written in Rust and is published to [crates.io](https://crates.io/crates/osm-cli). If you have a Rust toolchain installed, you can download and build it by running:
+This tool is written in Rust and is published to [crates.io](https://crates.io/crates/osm-cli). 
+
+`osm-cli` requires Rust 2024 (1.85.0). On most systems, Rust 1.84.0 is installed by default, so you have to manually update:
+
+```
+rustup install nightly
+rustup default nightly
+```
+
+You can then download and build it by running:
 
 ```
 $ cargo install osm-cli
