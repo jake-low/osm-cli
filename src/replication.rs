@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use log::{debug, info};
 use serde::{Deserialize, Serialize};
+use ureq::Error;
 
 #[derive(Parser)]
 pub struct CliArgs {
@@ -91,7 +92,9 @@ pub fn run(args: &CliArgs) -> anyhow::Result<()> {
         if args.urls_only {
             writeln!(io::stdout(), "{}", url)?;
         } else {
-            let info = server.get_state_info(seqno)?;
+            let info = server
+                .get_state_info(seqno)?
+                .expect("state info should be found for seqno less than current state");
             writeln!(
                 io::stdout(),
                 "{} {} {}",
@@ -133,7 +136,7 @@ impl ReplicationServer {
 
         // find a state file that is below the required timestamp
         loop {
-            lower = self.get_state_info(guess).ok();
+            lower = self.get_state_info(guess)?;
 
             if let Some(lower) = &lower {
                 if lower.timestamp >= timestamp {
@@ -172,7 +175,7 @@ impl ReplicationServer {
                 &lower.seqno, &upper.seqno, &guess
             );
 
-            let split = self.get_state_info(guess);
+            let split = self.get_state_info(guess)?;
 
             // TODO: what if split.is_none() (i.e. guess not found)?
             // we should walk up+down to find a nearby split candidate
@@ -206,10 +209,16 @@ impl ReplicationServer {
         Ok(state_info)
     }
 
-    fn get_state_info(&self, seqno: u64) -> anyhow::Result<StateInfo> {
+    // Returns Some `StateInfo` if found, or None upon 404.
+    // Other errors are propogated.
+    fn get_state_info(&self, seqno: u64) -> anyhow::Result<Option<StateInfo>> {
         let url = self.state_url(seqno);
         info!("GET {}", &url);
-        let res = ureq::get(&url).call()?;
+        let res = match ureq::get(&url).call() {
+            Ok(res) => res,
+            Err(Error::StatusCode(404)) => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
         let mut body = res.into_body();
 
         let state_info: StateInfo = match self.state_file_format {
@@ -217,7 +226,7 @@ impl ReplicationServer {
             StateFileFormat::Text => StateInfo::try_from_reader(body.as_reader())?,
         };
 
-        Ok(state_info)
+        Ok(Some(state_info))
     }
 
     fn latest_state_url(&self) -> String {
