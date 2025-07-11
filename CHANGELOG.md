@@ -6,7 +6,7 @@ Versioning of this project adheres to the [Semantic Versioning](https://semver.o
 
 ## [0.2.3]
 
-Released 2025-08-11
+Released 2025-07-11
 
 - When using the replication command's `--since` argument, an error will now be raised if the server returns an unexpected HTTP error (rather than continuing to binary search for the correct sequence file). (#2)
 
