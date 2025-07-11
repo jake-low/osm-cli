@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Versioning of this project adheres to the [Semantic Versioning](https://semver.org/spec/v2.0.0.html) spec.
 
+## [0.2.3]
+
+Released 2025-08-11
+
+- When using the replication command's `--since` argument, an error will now be raised if the server returns an unexpected HTTP error (rather than continuing to binary search for the correct sequence file). (#2)
+
 ## [0.2.2]
 
 Released 2025-04-01
@@ -36,6 +42,7 @@ Initial release.
 - Supports `node`, `way`, and `relation` subcommands for fetching info about OSM elements by ID.
 - Supports `replication` subcommand for listing available replication files since a given timestamp or seqno.
 
+[0.2.3]: https://github.com/jake-low/osm-cli/releases/tag/v0.2.3
 [0.2.2]: https://github.com/jake-low/osm-cli/releases/tag/v0.2.2
 [0.2.1]: https://github.com/jake-low/osm-cli/releases/tag/v0.2.1
 [0.2.0]: https://github.com/jake-low/osm-cli/releases/tag/v0.2.0
