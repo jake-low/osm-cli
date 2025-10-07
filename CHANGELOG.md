@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 Versioning of this project adheres to the [Semantic Versioning](https://semver.org/spec/v2.0.0.html) spec.
 
+## [0.2.4]
+
+Released 2025-10-07
+
+- Set a global timeout (30s) for outgoing HTTP requests (hoping this may fix a rare issue where `osm replication minute --seqno` will hang forever).
+- Add a User-Agent header to all outgoing HTTP requests too, as any well behaved HTTP client program ought to do.
+
 ## [0.2.3]
 
 Released 2025-07-11
