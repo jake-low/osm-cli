@@ -8,6 +8,7 @@ mod replication;
 mod util;
 
 const DEFAULT_SERVER: &str = "https://www.openstreetmap.org";
+const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -35,16 +36,19 @@ enum Command {
 
 fn main() -> anyhow::Result<()> {
     let args = CliArgs::parse();
-
     let server = &args.server;
 
-    let res = match args.subcommand {
-        Command::Node(args) => element::run(server, "node", &args),
-        Command::Way(args) => element::run(server, "way", &args),
-        Command::Relation(args) => element::run(server, "relation", &args),
-        Command::Changeset(args) => changeset::run(server, &args),
+    let config = ureq::config::Config::builder()
+        .user_agent(USER_AGENT)
+        .build();
+    let client = ureq::Agent::new_with_config(config);
 
-        Command::Replication(args) => replication::run(&args),
+    let res = match args.subcommand {
+        Command::Node(args) => element::run(&client, server, "node", &args),
+        Command::Way(args) => element::run(&client, server, "way", &args),
+        Command::Relation(args) => element::run(&client, server, "relation", &args),
+        Command::Changeset(args) => changeset::run(&client, server, &args),
+        Command::Replication(args) => replication::run(&client, &args),
     };
 
     match res {

@@ -18,14 +18,14 @@ pub struct CliArgs {
     id: u64,
 }
 
-pub fn run(server: &str, element_type: &str, args: &CliArgs) -> anyhow::Result<()> {
+pub fn run(client: &ureq::Agent, server: &str, element_type: &str, args: &CliArgs) -> anyhow::Result<()> {
     let endpoint = if args.history {
         format!("{}/api/0.6/{}/{}/history", server, element_type, args.id)
     } else {
         format!("{}/api/0.6/{}/{}", server, element_type, args.id)
     };
 
-    let req = ureq::get(&endpoint).header("Accept", args.format.mimetype());
+    let req = client.get(&endpoint).header("Accept", args.format.mimetype());
     let res = req.call()?;
 
     match content_type(&res) {

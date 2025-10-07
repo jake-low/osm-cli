@@ -30,11 +30,12 @@ pub struct CliArgs {
     server: String,
 }
 
-pub fn run(args: &CliArgs) -> anyhow::Result<()> {
+pub fn run(client: &ureq::Agent, args: &CliArgs) -> anyhow::Result<()> {
     env_logger::init();
 
     let server = match &args.server[..] {
         "minute" => ReplicationServer {
+            client,
             base_url: "https://planet.openstreetmap.org/replication/minute".to_string(),
             current_state_path: "state.txt".to_string(),
             state_file_format: StateFileFormat::Text,
@@ -42,6 +43,7 @@ pub fn run(args: &CliArgs) -> anyhow::Result<()> {
             data_file_extension: ".osc.gz".to_string(),
         },
         "changesets" => ReplicationServer {
+            client,
             base_url: "https://planet.openstreetmap.org/replication/changesets".to_string(),
             current_state_path: "state.yaml".to_string(),
             state_file_format: StateFileFormat::Yaml,
@@ -49,6 +51,7 @@ pub fn run(args: &CliArgs) -> anyhow::Result<()> {
             data_file_extension: ".osm.gz".to_string(),
         },
         url => ReplicationServer {
+            client,
             base_url: url.to_string(),
             // TODO: these values should probably be user-configurable
             current_state_path: "state.txt".to_string(),
@@ -109,7 +112,8 @@ pub fn run(args: &CliArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-struct ReplicationServer {
+struct ReplicationServer<'a> {
+    client: &'a ureq::Agent,
     base_url: String,
     current_state_path: String,
     state_file_format: StateFileFormat,
@@ -123,7 +127,7 @@ enum StateFileFormat {
     Text,
 }
 
-impl ReplicationServer {
+impl<'a> ReplicationServer<'a> {
     fn timestamp_to_seqno(&self, timestamp: DateTime<Utc>) -> anyhow::Result<u64> {
         let mut upper = self.get_current_state_info()?;
 
@@ -198,7 +202,7 @@ impl ReplicationServer {
     fn get_current_state_info(&self) -> anyhow::Result<StateInfo> {
         let url = self.latest_state_url();
         info!("GET {}", &url);
-        let res = ureq::get(&url).call()?;
+        let res = self.client.get(&url).call()?;
         let mut body = res.into_body();
 
         let state_info: StateInfo = match self.state_file_format {
@@ -214,7 +218,7 @@ impl ReplicationServer {
     fn get_state_info(&self, seqno: u64) -> anyhow::Result<Option<StateInfo>> {
         let url = self.state_url(seqno);
         info!("GET {}", &url);
-        let res = match ureq::get(&url).call() {
+        let res = match self.client.get(&url).call() {
             Ok(res) => res,
             Err(Error::StatusCode(404)) => return Ok(None),
             Err(err) => return Err(err.into()),
