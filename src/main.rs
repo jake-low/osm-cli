@@ -1,4 +1,5 @@
 use std::io;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 
@@ -39,6 +40,7 @@ fn main() -> anyhow::Result<()> {
     let server = &args.server;
 
     let config = ureq::config::Config::builder()
+        .timeout_global(Some(Duration::from_secs(30)))
         .user_agent(USER_AGENT)
         .build();
     let client = ureq::Agent::new_with_config(config);
